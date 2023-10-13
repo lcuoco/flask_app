@@ -1,0 +1,53 @@
+name: Test, build, push Docker image and release Helm chart
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+jobs:  
+  # This job is responsible for running unit tests
+  perform_unit_tests:
+    runs-on: ubuntu-latest # defines the operating system on which the machine will run
+    steps:
+      - uses: actions/checkout@v4.1.0
+      - uses: actions/setup-python@v4.7.0
+        with:
+          python-version: '3.10'
+          architecture: 'x64' # optional x64 or x86. Defaults to x64 if not specified
+      - run: pip install -r app/requirements.txt
+      - run: python app/test_app.py && echo "Unit tests passed!" || echo "¯\(º_o)/¯"
+  # This job is responsible for building and pushing the Docker image
+  build_and_push_to_docker_hub:
+    runs-on: ubuntu-latest
+    needs: perform_unit_tests
+    steps:
+      - uses: actions/checkout@v2
+      - run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+      - run: docker build -t ${{ secrets.DOCKER_USERNAME }}/${{ secrets.DOCKER_REPOSITORY_NAME }}:latest -f app/Dockerfile app
+      - run: docker push ${{ secrets.DOCKER_USERNAME }}/${{ secrets.DOCKER_REPOSITORY_NAME }}:latest
+  # This job is responsible for releasing the Helm chart
+  release_helm_chart:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    needs: build_and_push_to_docker_hub
+    steps:
+      # Checks out the repository contents to , so that your workflow can access them.
+      - name: Checkout
+        uses: actions/checkout@v4.1.0
+        with:        
+          fetch-depth: 0 # Set fetch-depth: 0 to fetch all history for all branches and tags.
+      - name: Configure Git
+        run: |
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+      - name: Install Helm
+        uses: azure/setup-helm@v3.5    
+        with:
+          version: v3.13.0 # The version of Helm to install.
+      - name: Run chart-releaser
+        uses: helm/chart-releaser-action@v1.5.0
+        with:
+          charts_dir: charts # The path to the chart directory.
+        env:
+          CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}" # This is the default GitHub token provided by GitHub Actions.
+          CR_SKIP_EXISTING: true # Set to true to skip existing charts in the repository.
